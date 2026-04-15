@@ -1,0 +1,5 @@
+Cluster,n_pathways,n_fdr,top_pathway,top_nes
+1,46,26,Huntington disease,-3.09432523436179
+2,34,3,Oxidative phosphorylation,-2.57852859107781
+3,17,0,Aminoacyl-tRNA biosynthesis,2.28138566592267
+4,81,46,Pathways of neurodegeneration - multiple diseases,3.72188394584568

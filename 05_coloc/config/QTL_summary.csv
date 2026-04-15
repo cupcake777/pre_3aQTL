@@ -1,0 +1,2 @@
+Type,NumberRNASeqandGTSamples,NumberRNASeqSamples,Number_of_sigpheno,allPairsTabixFilename,sigPairsTabixFilename
+stage1,189,189,28,/mnt/share_group_folder/tmp/work/Pre_3aQTL/Three_stages/05_coloc/input/stage1.all_pairs.txt.gz,/mnt/share_group_folder/tmp/work/Pre_3aQTL/Three_stages/05_coloc/input/stage1.signif_pairs.txt.gz
