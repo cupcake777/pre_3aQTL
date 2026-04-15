@@ -1148,7 +1148,7 @@ fig7_res$Trait_label <- factor(fig7_res$Trait_label, levels = trait_order)
 fig7_res$sig_label <- ifelse(fig7_res$FDR < 0.001, "***",
                       ifelse(fig7_res$FDR < 0.01,  "**",
                       ifelse(fig7_res$FDR < 0.05,  "*",
-                      ifelse(fig7_res$FDR < 0.10,  "·", ""))))
+                      ifelse(fig7_res$FDR < 0.10,  ".", ""))))
 
 ## ── Cap OR for display (colour scale) ────────────────────────────────────────
 fig7_res$log2OR <- log2(pmax(fig7_res$OR, 0.01))
@@ -1193,7 +1193,7 @@ pA <- ggplot(fig7_res,
     ),
     x       = NULL,
     y       = NULL,
-    caption = "  * FDR<0.05   ** FDR<0.01   *** FDR<0.001   · FDR<0.10"
+    caption = "  * FDR<0.05   ** FDR<0.01   *** FDR<0.001   . FDR<0.10"
   ) +
   theme_ppt(base_size = 13) +
   theme(

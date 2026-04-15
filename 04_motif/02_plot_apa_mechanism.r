@@ -2,14 +2,9 @@
 # =============================================================================
 # APA Mechanism Validation Figure — Publication Grade
 # =============================================================================
-# 用途：证明 3'aQTL mapping 结果的作用机制 (APA proximal/distal PAS 使用变化)
-#
-# 输出：单页复合图，PPT 拼接优化尺寸（14×5 inches，宽扁型，可上下堆叠）
-#   Left  : PDUI boxplot + jitter + Wilcoxon 统计检验
-#   Right : 每个基因型组各 2 个代表性样本的独立 WIG/bigWig 覆盖度轨道
-#           + SNP 位置红色虚线贯穿所有轨道
-#           + 底部 motif 序列高亮（突变碱基红色，rsid/allele 标注）
-#           + 机制类型标注
+# This script builds a single-page composite figure:
+# - Left panel: PDUI distribution by genotype with pairwise Wilcoxon tests.
+# - Right panel: per-sample coverage tracks around PAS/SNP plus motif annotation.
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -21,14 +16,13 @@ suppressPackageStartupMessages({
   library(grid)
   library(scales)
   library(GenomicFeatures)
-  library(dplyr)   # 最后加载，确保 dplyr 的 select/filter/mutate 优先
+  library(dplyr)
 })
 
 # =============================================================================
-# 1. CONFIGURATION  — 修改此处以复用到其他基因/SNP
+# 1. CONFIGURATION
 # =============================================================================
 C <- list(
-  # ---- 基因 / SNP 信息 ----
   snp         = "rs35683888",
   gene        = "RPL22L1",
   id          = "ENST00000295830.13|RPL22L1|chr3:170864875-170866524|-",
@@ -36,46 +30,35 @@ C <- list(
   snp_pos     = 170866285,
   strand      = "-",
 
-  # 3'UTR 范围（hg38；用于 gene model 参考）
   utr         = c(170864875L, 170866524L),
 
-  # Proximal / Distal PAS 坐标（按 [1]=Proximal, [2]=Distal 顺序）
-  # 会从 test.r 结果自动覆盖（如果 motif_table 存在）
   pas         = c(0L, 0L),
 
-  # PAS motif 序列（逗号分隔时取第一个）
   pas_ref     = "AAAAAA",
   pas_alt     = "AAGAAA",
   pas_type    = "PAS_switch",   # PAS_creation / PAS_switch / PAS_disruption
 
-  # SNP 等位基因（用于轴标签）
   ref_allele  = "A",
   alt_allele  = "G",
 
-  # ---- 文件路径 ----
   wig_dir     = "/home/lyc/share_group_folder/CHB/wig",
   vcf_file    = "/home/lyc/share_group_folder/raw_data/CHB_all_anno.vcf.gz",
   pheno_file  = "../01_pre/after.combat.txt",
   gtf_file    = "/home/lyc/share_group_folder/ref/gencode.v40.annotation.gtf.gz",
   motif_table = "Motif_Mechanism_Table.txt",
 
-  # ---- 绘图参数 ----
-  # 窗口：以 snp_pos 为中心 ± flank；如果 pA_site 不在窗口内则自动扩展
   flank       = 1500L,
   n_per_group = 2L,
 
-  # 颜色（CC/CT/TT，Nature Genetics 风格）
   cols        = c("#56B4E9", "#FFB482", "#8DE5A1"),
 
-  # ---- 输出 ----
-  # PPT 拼接推荐：宽扁型，14×5 inches（每行一个基因型机制）
   out_pdf     = "APA_mechanism_RPL22L1_rs35683888.pdf",
   out_width   = 14,
   out_height  = 5
 )
 
 # =============================================================================
-# 1b. 从命令行覆盖配置
+# 1b. COMMAND-LINE OVERRIDES
 # =============================================================================
 args <- commandArgs(trailingOnly = TRUE)
 
@@ -376,8 +359,7 @@ if (batch_mode) {
   quit(status = 0)
 }
 
-# ---- 预处理 pas_ref / pas_alt ----
-# 解析逗号分隔的 motif 列表，过滤掉 None/空值
+# Parse motif strings and resolve display/action logic by PAS mechanism type.
 .parse_motifs <- function(x) {
   if (is.null(x) || is.na(x) || x == "" || tolower(trimws(x)) == "none") return(character(0))
   ms <- trimws(strsplit(as.character(x), ",")[[1]])
@@ -389,17 +371,12 @@ if (batch_mode) {
   if (length(ms) == 0) NA_character_ else ms[1]
 }
 
-# 根据 PAS 机制类型决定展示哪个 motif 以及如何高亮
-# PAS_creation:  ref=None, alt=new motif  → 展示 alt，标注"creates"
-# PAS_disruption: ref=motif, alt=None     → 展示 ref，标注"disrupts"
-# PAS_switch:    ref/alt 各有 motif       → 优先选择两者集合中差异最显著的 motif 对
 .resolve_motif <- function(pas_ref, pas_alt, pas_type) {
   r_all <- .parse_motifs(pas_ref)
   a_all <- .parse_motifs(pas_alt)
   type_low <- tolower(pas_type)
 
   if (grepl("creation", type_low)) {
-    # alt 创造新 PAS；ref 可能是 None
     a <- if (length(a_all) > 0) a_all[1] else NA_character_
     r <- if (length(r_all) > 0) r_all[1] else a
     list(show_ref = r,
@@ -408,31 +385,24 @@ if (batch_mode) {
          action   = if (!is.na(a)) sprintf("creates %s", a) else "")
 
   } else if (grepl("disruption", type_low)) {
-    # ref motif 被破坏；alt 可能是 None
     r <- if (length(r_all) > 0) r_all[1] else NA_character_
-    a <- if (length(a_all) > 0) a_all[1] else r  # alt=None 时重用 ref（无高亮）
+    a <- if (length(a_all) > 0) a_all[1] else r
     list(show_ref = r,
          show_alt = a,
          label    = "PAS Disruption",
          action   = if (!is.na(r)) sprintf("disrupts %s", r) else "")
 
   } else if (grepl("switch", type_low)) {
-    # PAS_switch: 优先选择在 ref 中有但 alt 中没有的（或反之），以突出差异
-    # 策略：ref_only = ref集合 - alt集合；alt_only = alt集合 - ref集合
     ref_only <- setdiff(r_all, a_all)
     alt_only <- setdiff(a_all, r_all)
 
     if (length(ref_only) > 0 && length(alt_only) > 0) {
-      # 理想情况：有明确的 ref→alt 差异 motif
       r <- ref_only[1]; a <- alt_only[1]
     } else if (length(ref_only) > 0) {
-      # ref 有独有 motif，alt 没有新 motif（近似 disruption）
       r <- ref_only[1]; a <- if (length(a_all) > 0) a_all[1] else r
     } else if (length(alt_only) > 0) {
-      # alt 有新 motif（近似 creation）
       r <- if (length(r_all) > 0) r_all[1] else alt_only[1]; a <- alt_only[1]
     } else {
-      # ref 和 alt 完全相同集合，取第一个
       r <- if (length(r_all) > 0) r_all[1] else NA_character_
       a <- if (length(a_all) > 0) a_all[1] else NA_character_
     }
@@ -457,7 +427,7 @@ if (batch_mode) {
 motif_info <- .resolve_motif(C$pas_ref, C$pas_alt, C$pas_type)
 
 # =============================================================================
-# 1c. 从 test.r 结果自动获取正确的 PAS 信息
+# 1c. OPTIONAL LOOKUP FROM MOTIF TABLE
 # =============================================================================
 .lookup_motif_table <- function(snp_id, motif_file) {
   if (!file.exists(motif_file)) {
@@ -494,25 +464,20 @@ motif_info <- .resolve_motif(C$pas_ref, C$pas_alt, C$pas_type)
   )
 }
 
-# 尝试从 motif table 获取 PAS 信息
 motif_lookup <- .lookup_motif_table(C$snp, C$motif_table)
 
 if (!is.null(motif_lookup)) {
-  # 使用 lookup 结果覆盖配置
   C$pas[1] <- motif_lookup$pA_site
   C$pas_type <- motif_lookup$PAS_Type
   C$pas_ref <- motif_lookup$PAS_Ref
   C$pas_alt <- motif_lookup$PAS_Alt
   
-  # 重新解析 motif_info（因为 pas_ref/pas_alt 可能已更新）
   motif_info <- .resolve_motif(C$pas_ref, C$pas_alt, C$pas_type)
   
   message(sprintf("  [Auto] Updated pas[1]=%d from motif table", C$pas[1]))
 } else {
-  # 如果 lookup 失败，使用 phenotype_id 推断 UTR 范围
   message(sprintf("  [Warn] SNP %s not found in motif table, using config values", C$snp))
   
-  # 从 id 解析 utr: format = "transcript|gene|chr:start-end|strand"
   id_parts <- strsplit(C$id, "[|]")[[1]]
   if (length(id_parts) >= 4) {
     region <- id_parts[3]  # "chr:start-end"
@@ -526,14 +491,13 @@ if (!is.null(motif_lookup)) {
       }
     }
   }
-  # 如果 pas 仍为 0，设置一个合理的默认值
   if (C$pas[1] == 0) {
-    C$pas[1] <- C$snp_pos - 30  # 假设 SNP 在 PAS 上游 30bp
+    C$pas[1] <- C$snp_pos - 30
     message(sprintf("  [Warn] Using estimated pas[1]=%d (snp_pos - 30)", C$pas[1]))
   }
 }
 
-# ---- 派生参数 ----
+# Derive the plotting window around PAS and ensure SNP/UTR context is included.
 geno_labels <- setNames(
   c(paste0(C$ref_allele, C$ref_allele),
     paste0(C$ref_allele, C$alt_allele),
@@ -543,25 +507,17 @@ geno_labels <- setNames(
 col_map <- setNames(C$cols, geno_labels)
 is_neg  <- (C$strand == "-")
 
-# ---- 窗口：以 PAS (pA_site) 为中心，显示 PAS 附近的序列变化 ----
-# 注意：对于 Distal APA 案例，UTR 可能距离 PAS 很远
-# 此时应聚焦于 PAS 区域，UTR 效应通过左边的 PDUI boxplot 展示
 
-# 首先以 PAS 为中心
 win <- c(
   C$pas[1] - C$flank,
   C$pas[1] + C$flank
 )
 
-# 如果 SNP 不在窗口内，自动扩展窗口包含 SNP
 if (C$snp_pos < win[1]) win[1] <- C$snp_pos - C$flank
 if (C$snp_pos > win[2]) win[2] <- C$snp_pos + C$flank
 
-# 如果 UTR 在窗口附近（< 20kb），也包含进来；否则忽略 UTR
-# 因为 Distal APA 场景下 UTR 距离 PAS 太远，显示在同一窗口没有意义
 dist_utr_to_pas <- if (C$strand == "-") C$utr[1] - C$pas[1] else C$utr[2] - C$pas[1]
 if (dist_utr_to_pas > 0 && dist_utr_to_pas < 20000) {
-  # UTR 距离 PAS < 20kb，包含进来
   if (C$utr[1] < win[1]) win[1] <- C$utr[1] - C$flank
   if (C$utr[2] > win[2]) win[2] <- C$utr[2] + C$flank
   message(sprintf("  [Info] UTR within %.1f kb of PAS - included in window", dist_utr_to_pas/1000))
@@ -853,7 +809,6 @@ comparisons_all <- list(c(geno_labels["0"], geno_labels["2"]),
                         c(geno_labels["1"], geno_labels["2"]))
 comparisons_use <- Filter(function(x) all(x %in% present_genos), comparisons_all)
 
-# 标题：gene | snp | mechanism
 box_title    <- sprintf("%s  %s", C$gene, C$snp)
 box_subtitle <- sprintf("%s  (n=%d)", motif_info$label, nrow(m_data))
 
@@ -939,7 +894,7 @@ gene_tk <- tryCatch({
     start            = win[1],
     end              = win[2],
     genome           = "hg38",
-    strand           = C$strand,  # 显式指定链方向
+    strand           = C$strand,
     name             = C$gene,
     showId           = TRUE,
     geneSymbol       = TRUE,
@@ -971,8 +926,6 @@ gene_tk <- tryCatch({
   )
 })
 
-# 轨道列表 & 高度比例（紧凑）
-# 轨道列表: axis + coverage + gene (SNP highlighted via hl_ranges + dashed line)
 n_data  <- length(data_tks)
 all_tks <- c(list(axis_tk), data_tks, list(gene_tk))
 tk_sizes <- c(
@@ -985,12 +938,10 @@ tk_sizes_norm <- tk_sizes / sum(tk_sizes) * 10
 # =============================================================================
 # 6. MOTIF ANNOTATION HELPER
 # =============================================================================
-# 展示 ref → alt motif，突变碱基标红，标注 rsid、allele 变化、机制说明
 .draw_motif <- function(show_ref, show_alt, mechanism_label,
                         snp_id, ref_allele, alt_allele, action,
                         x_center = 0.5, y_pos = 0.06, snp_x_npc = NULL) {
 
-  # 选择要展示的序列
   has_ref <- !is.null(show_ref) && !is.na(show_ref) && nchar(show_ref) == 6
   has_alt <- !is.null(show_alt) && !is.na(show_alt) && nchar(show_alt) == 6
 
@@ -998,22 +949,16 @@ tk_sizes_norm <- tk_sizes / sum(tk_sizes) * 10
 
   type_low <- tolower(mechanism_label)
 
-  # 对于不同机制，显示逻辑：
-  # creation:  只显示 alt（新创建的 motif），全部碱基黑色，注 "creates XXXXXX"
-  # disruption: 显示 ref（被破坏的 motif），突变碱基标红，注 "disrupts XXXXXX"
-  # switch:    显示 ref（下方），alt（上方），两者差异碱基标红
   if (grepl("creation", type_low)) {
     seq_show <- if (has_alt) show_alt else show_ref
     r_vec <- if (has_ref) strsplit(show_ref, "")[[1]] else rep("?", 6)
     a_vec <- strsplit(seq_show, "")[[1]]
-    # 对于 creation，ref 通常是 None；所有碱基正常显示（无红色）
     snp_idx <- integer(0)
     label_prefix <- "creates: "
   } else if (grepl("disruption", type_low)) {
     seq_show <- if (has_ref) show_ref else show_alt
     r_vec <- strsplit(seq_show, "")[[1]]
     a_vec <- if (has_alt) strsplit(show_alt, "")[[1]] else r_vec
-    # disruption：比较 ref vs alt，标红 ref 中被改变的碱基
     snp_idx <- if (length(r_vec) == length(a_vec)) which(r_vec != a_vec) else integer(0)
     # Fallback: if pas_alt=None, ref_allele position is inferred by matching ref_allele
     # in the motif sequence (pick the central-most match)
@@ -1027,7 +972,6 @@ tk_sizes_norm <- tk_sizes / sum(tk_sizes) * 10
     }
     label_prefix <- "disrupts: "
   } else {
-    # switch: 展示 ref，高亮将被改变的碱基
     seq_show <- if (has_ref) show_ref else show_alt
     r_vec <- if (has_ref) strsplit(show_ref, "")[[1]] else rep("?", 6)
     a_vec <- if (has_alt) strsplit(show_alt, "")[[1]] else r_vec
@@ -1039,7 +983,6 @@ tk_sizes_norm <- tk_sizes / sum(tk_sizes) * 10
   unit_w  <- 0.018
   start_x <- x_center - (n * unit_w) / 2
 
-  # 类型前缀
   grid.text(
     label_prefix,
     x    = unit(start_x - 0.004, "npc"),
@@ -1048,7 +991,6 @@ tk_sizes_norm <- tk_sizes / sum(tk_sizes) * 10
     gp   = gpar(fontsize = 8, fontface = "italic", col = "grey40")
   )
 
-  # 绘制每个碱基
   for (i in seq_along(r_vec)) {
     is_mut <- i %in% snp_idx
     grid.text(
@@ -1064,7 +1006,6 @@ tk_sizes_norm <- tk_sizes / sum(tk_sizes) * 10
     )
   }
 
-  # 如果是 switch，额外在下方显示 alt 序列
   # alt_row_offset = 0.07 npc (>font size 14 ~0.019 npc) to avoid overlap with ref row
   alt_row_offset <- 0.07
   if (grepl("switch", type_low) && has_alt) {
@@ -1092,13 +1033,11 @@ tk_sizes_norm <- tk_sizes / sum(tk_sizes) * 10
     }
   }
 
-  # SNP 标注（rsid + allele），在突变碱基下方连线处
   sx <- if (!is.null(snp_x_npc) && !is.na(snp_x_npc)) snp_x_npc else x_center
 
   # For switch mode: labels go below the alt motif row; otherwise below the ref row
   label_y_base <- if (grepl("switch", type_low) && has_alt) y_pos - alt_row_offset else y_pos
 
-  # 短竖线（从 motif 字符下方向下延伸）
   grid.segments(
     x0 = unit(sx, "npc"), y0 = unit(label_y_base - 0.010, "npc"),
     x1 = unit(sx, "npc"), y1 = unit(y_pos + 0.028, "npc"),
@@ -1122,8 +1061,6 @@ tk_sizes_norm <- tk_sizes / sum(tk_sizes) * 10
     gp = gpar(fontsize = 7, col = "#E63946")
   )
 
-  # Mechanism type label — 仅放在 boxplot subtitle，此处不再重复
-  # action label 已由 label_prefix 行传达，不再额外绘制以避免重复
 }
 
 # =============================================================================
@@ -1158,7 +1095,6 @@ vp_left <- viewport(
 print(p_box, vp = vp_left)
 
 # ── Right panel ──
-# 添加 margin 避免坐标轴被裁剪
 vp_right <- viewport(
   x      = unit(left_frac + right_frac / 2, "npc"),
   y      = unit(0.48, "npc"),  # slightly lower to give top margin
@@ -1169,7 +1105,6 @@ vp_right <- viewport(
 pushViewport(vp_right)
 
 # Pre-compute track layout fractions (used for SNP line and motif position)
-# 布局：axis(0.50) + cov*n + gene(0.60)
 tk_total      <- 0.50 + n_data * 0.80 + 0.60   # axis + cov*n + gene
 gene_frac_npc <- 0.60 / tk_total        # npc fraction for gene track height
 motif_frac_npc <- (0.60 + 0.10) / tk_total  # above gene track to avoid overlap
@@ -1204,7 +1139,6 @@ plotTracks(
 )
 
 # ── Red dashed SNP line ──
-# 延伸：从 gene track 上方到 viewport 顶部
 snp_line_y0 <- motif_frac_npc   # just above gene track
 snp_line_y1 <- 0.94
 grid.segments(
@@ -1213,17 +1147,12 @@ grid.segments(
   gp = gpar(col = "#E63946", lty = 2, lwd = 1.5)
 )
 
-# ── Motif 序列绘制（碱基级别标红）────
-# 放在 gene track 上方
 motif_track_y <- motif_frac_npc  # just above gene track
 
-# 准备 motif 序列和需要标红的位置
 motif_seq <- if (!is.na(motif_info$show_ref)) motif_info$show_ref else 
              if (!is.na(motif_info$show_alt)) motif_info$show_alt else "N/A"
 motif_vec <- strsplit(motif_seq, "")[[1]]
 
-# 计算需要标红的碱基位置
-# 对于 disruption: 使用 fallback 逻辑找 ref_allele 位置
 snp_idx <- integer(0)
 if (grepl("disruption", tolower(motif_info$label))) {
   if (length(motif_vec) == 6 && nchar(C$ref_allele) == 1) {
@@ -1234,7 +1163,6 @@ if (grepl("disruption", tolower(motif_info$label))) {
     }
   }
 } else if (grepl("switch", tolower(motif_info$label))) {
-  # 对于 switch: 对比 ref 和 alt
   ref_seq <- motif_info$show_ref
   alt_seq <- motif_info$show_alt
   if (!is.na(ref_seq) && !is.na(alt_seq) && nchar(ref_seq) == 6 && nchar(alt_seq) == 6) {
@@ -1243,7 +1171,6 @@ if (grepl("disruption", tolower(motif_info$label))) {
     snp_idx <- which(r_vec != a_vec)
   }
 } else if (grepl("creation", tolower(motif_info$label))) {
-  # creation 且: 如果有 ref与 alt 不同，则对比找差异；否则不标红
   ref_seq <- motif_info$show_ref
   alt_seq <- motif_info$show_alt
   if (!is.na(ref_seq) && !is.na(alt_seq) && nchar(ref_seq) == 6 && nchar(alt_seq) == 6) {
@@ -1255,13 +1182,9 @@ if (grepl("disruption", tolower(motif_info$label))) {
   }
 }
 
-# 绘制 motif 序列（每个碱基单独绘制，实现标红）
-# 格式: "disrupts: A A T A A A  rs13394744 (T>A)"
-# 对于 switch: 显示两行 "ref: AAAAAA" 和 "alt: AAAAAG"
 is_switch_mode <- grepl("switch", tolower(motif_info$label))
-unit_w <- 0.012  # 每个碱基的宽度
+unit_w <- 0.012
 
-# 绘制前缀：disrupts / creates / switches（简化，不显示完整motif）
 action_prefix <- switch(
   motif_info$label,
   "PAS Disruption" = "disrupts:",
@@ -1270,9 +1193,7 @@ action_prefix <- switch(
   tolower(motif_info$label)
 )
 
-# 计算y位置：switch模式需要两行，给更多空间避免与gene track重叠
 if (is_switch_mode) {
-  # ref motif (upper row) - 居中对齐红色虚线
   motif_center_x <- snp_x_npc_right+0.01
   motif_start_x <- motif_center_x - (6 * unit_w) / 2
   ref_y <- motif_track_y + 0.025  # higher position
@@ -1330,10 +1251,8 @@ if (is_switch_mode) {
   # rsid below alt row - position higher to avoid gene track overlap
   rsid_y <- alt_y - 0.020
 } else {
-  # 非 switch 模式：单行
-  # 居中对齐：让 motif 中心对准红色虚线
   motif_center_x <- snp_x_npc_right+0.01
-  motif_start_x <- motif_center_x - (6 * unit_w) / 2  # 6个碱基居中
+  motif_start_x <- motif_center_x - (6 * unit_w) / 2
   grid.text(
     action_prefix,
     x = unit(motif_start_x - 0.025, "npc"),
@@ -1342,7 +1261,6 @@ if (is_switch_mode) {
     gp = gpar(fontsize = 9, fontface = "italic", col = "grey40")
   )
   
-  # 绘制每个碱基
   for (i in seq_along(motif_vec)) {
     is_mut <- i %in% snp_idx
     grid.text(
@@ -1360,7 +1278,6 @@ if (is_switch_mode) {
   rsid_y <- motif_track_y
 }
 
-# 绘制 rsid 和 allele
 rsid_x <- snp_x_npc_right + 0.04
 grid.text(
   sprintf("%s (%s>%s)", C$snp, C$ref_allele, C$alt_allele),
@@ -1401,9 +1318,6 @@ grid.text(
 )
 
 # ── Motif annotation ──
-# 现在使用 Gviz AnnotationTrack (motif_tk) 来显示 motif 标签
-# 位置已自动在 track 中处理，不需要额外的 grid.text
-# SNP 连接线：延伸到 motif track 区域
 snp_line_y0 <- motif_frac_npc - 0.02   # just below motif track
 snp_line_y1 <- 0.94
 
